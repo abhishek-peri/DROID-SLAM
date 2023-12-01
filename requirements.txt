@@ -1,0 +1,4 @@
+pytorch-scatter
+open3d
+tensorboard
+scipy
