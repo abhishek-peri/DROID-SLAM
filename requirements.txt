@@ -1,4 +1,3 @@
-pytorch-scatter
-open3d
-tensorboard
-scipy
+torch-scatter
+suitesparse-graphblas
+plyfile

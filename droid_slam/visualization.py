@@ -6,9 +6,11 @@ import time
 import argparse
 import numpy as np
 import open3d as o3d
+import os
 
 from lietorch import SE3
 import geom.projective_ops as pops
+from plyfile import PlyData, PlyElement
 
 CAM_POINTS = np.array([
         [ 0,   0,   0],
@@ -50,6 +52,65 @@ def create_point_actor(points, colors):
     point_cloud.colors = o3d.utility.Vector3dVector(colors)
     return point_cloud
 
+def save_points(video, scene_name="bonsai", imagedir=None):
+    with torch.no_grad():
+        with video.get_lock():
+            t = video.counter.value 
+            dirty_index, = torch.where(video.dirty.clone())
+            dirty_index = dirty_index
+
+        if len(dirty_index) == 0:
+            return
+
+        video.dirty[dirty_index] = False
+
+        # convert poses to 4x4 matrix
+        poses = torch.index_select(video.poses, 0, dirty_index)
+        disps = torch.index_select(video.disps, 0, dirty_index)
+        # Ps = SE3(poses).inv().matrix().cpu().numpy()
+
+        images = torch.index_select(video.images, 0, dirty_index)
+        images = images.cpu()[:,[2,1,0],3::8,3::8].permute(0,2,3,1) / 255.0
+        points = droid_backends.iproj(SE3(poses).inv().data, disps, video.intrinsics[0]).cpu()
+
+        filter_thresh = 0.005
+        thresh = filter_thresh * torch.ones_like(disps.mean(dim=[1,2]))
+        
+        count = droid_backends.depth_filter(
+            video.poses, video.disps, video.intrinsics[0], dirty_index, thresh)
+
+        count = count.cpu()
+        disps = disps.cpu()
+        masks = ((count >= 2) & (disps > .5*disps.mean(dim=[1,2], keepdim=True)))
+        mask = masks.reshape(-1)
+        pts = points.reshape(-1, 3)[mask].cpu().numpy()
+        clr = images.reshape(-1, 3)[mask].cpu().numpy()
+        # save pcd 
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(pts)
+        pcd.colors = o3d.utility.Vector3dVector(clr)
+        results_dir = os.path.dirname(imagedir)
+        if not os.path.exists(results_dir):
+            os.makedirs(results_dir)
+        else:
+            print("Directory already exists at {}".format(results_dir))
+        o3d.io.write_point_cloud(results_dir+"/points.ply", pcd, write_ascii=True)
+        # save a new ply file with the same points using plyfile and vertex contains the points and colors
+        # vertex = np.zeros(len(pts), dtype=[('x', 'f4'), ('y', 'f4'), ('z', 'f4'), ('red', 'u1'), ('green', 'u1'), ('blue', 'u1')])
+        # vertex['x'] = pts[:,0]
+        # vertex['y'] = pts[:,1]
+        # vertex['z'] = pts[:,2]
+        # vertex['red'] = clr[:,0]*255
+        # vertex['green'] = clr[:,1]*255
+        # vertex['blue'] = clr[:,2]*255
+        # el = PlyElement.describe(vertex, 'vertex')
+        # ply = PlyData([el], text=True)
+        # # write the header and end of the file along with the vertex in ascii format
+        # ply.write(results_dir+"/points_new.ply")
+        # print("Saved point cloud to {}".format(results_dir+"/points_new.ply"))
+
+
+
 def droid_visualization(video, device="cuda:0"):
     """ DROID visualization frontend """
 
@@ -72,6 +133,7 @@ def droid_visualization(video, device="cuda:0"):
         droid_visualization.filter_thresh *= 0.5
         with droid_visualization.video.get_lock():
             droid_visualization.video.dirty[:droid_visualization.video.counter.value] = True
+
 
     def animation_callback(vis):
         cam = vis.get_view_control().convert_to_pinhole_camera_parameters()
@@ -132,6 +194,23 @@ def droid_visualization(video, device="cuda:0"):
                 point_actor = create_point_actor(pts, clr)
                 vis.add_geometry(point_actor)
                 droid_visualization.points[ix] = point_actor
+
+            ### Hack to save Point Cloud Data and Camnera results ###
+            
+            # Save points
+            pcd_points = o3d.geometry.PointCloud()
+            for p in droid_visualization.points.items():
+                pcd_points += p[1]
+            o3d.io.write_point_cloud(f"/home/abhishek/projects/DROID-SLAM/results_bonsai/points.ply", pcd_points, write_ascii=False)
+                
+            # Save pose
+            pcd_camera = create_camera_actor(True)
+            for c in droid_visualization.cameras.items():
+                pcd_camera += c[1]
+
+            o3d.io.write_line_set(f"/home/abhishek/projects/DROID-SLAM/results_bonsai/camera.ply", pcd_camera, write_ascii=False)
+
+            ### end ###
 
             # hack to allow interacting with vizualization during inference
             if len(droid_visualization.cameras) >= droid_visualization.warmup:

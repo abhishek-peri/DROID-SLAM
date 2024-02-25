@@ -11,6 +11,7 @@ from trajectory_filler import PoseTrajectoryFiller
 
 from collections import OrderedDict
 from torch.multiprocessing import Process
+from visualization import save_points
 
 
 class Droid:
@@ -37,6 +38,10 @@ class Droid:
             from visualization import droid_visualization
             self.visualizer = Process(target=droid_visualization, args=(self.video,))
             self.visualizer.start()
+        # else:
+        #     from visualization import save_points
+        #     self.visualizer = Process(target=save_points, args=(self.video,))
+        #     self.visualizer.start()
 
         # post processor - fill in poses for non-keyframes
         self.traj_filler = PoseTrajectoryFiller(self.net, self.video)
@@ -85,5 +90,8 @@ class Droid:
         self.backend(12)
 
         camera_trajectory = self.traj_filler(stream)
-        return camera_trajectory.inv().data.cpu().numpy()
+        return camera_trajectory.inv().cpu().matrix().numpy()
+        # return camera_trajectory.inv().data.cpu().numpy()
 
+    def saving_pcd(self, scene_name):
+        save_points(self.video, scene_name=scene_name, imagedir=self.args.imagedir)
